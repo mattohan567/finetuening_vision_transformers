@@ -7,6 +7,16 @@ This project implements a hierarchical approach to chest X-ray classification us
 
 This approach mimics radiologist workflow (first detecting abnormality, then characterizing it) and improves performance by specializing each model for its specific task.
 
+## Medium Article
+For a detailed explanation of this project, methodology, and results, read my Medium article:
+[Hierarchical Vision Transformers for NIH Chest X-Ray Classification](https://medium.com/@matt.ohan/hierarchical-vision-transformers-for-nih-chest-x-ray-classification-3aa6e67249de)
+
+## Github Repo
+The code for this project is available on GitHub:
+https://github.com/mattohan567/finetuening_vision_transformers
+
+
+
 ## Dataset
 The NIH Chest X-ray dataset containing 14 common thoracic pathologies plus a "No Finding" category.
 
@@ -53,9 +63,11 @@ results = nih_hvit.test_hierarchical_model(
 ```
 
 ## Results
-- Binary classifier: AUC 0.89, Accuracy 82%
-- Disease classifier: Mean AUC 0.83 across 14 conditions
-- Hierarchical system: Improved efficiency with minimal performance loss
+- Binary classifier: Accuracy 1.0 on test set
+- Disease classifier: Mean AUC 0.7563 across 14 conditions
+- Strong performers: Consolidation (0.8793), Cardiomegaly (0.8861), Pneumonia (0.8535)
+- Moderate performers: Pneumothorax (0.7842), Effusion (0.7133), Infiltration (0.7385)
+- Weaker performers: Nodule (0.6588), Pleural_Thickening (0.4711)
 
 ## Dependencies
 - PyTorch
