@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from sklearn.metrics import roc_auc_score, accuracy_score
+from sklearn.metrics import roc_auc_score, accuracy_score, f1_score
 from transformers import ViTForImageClassification
 
 class ViTBinaryClassifier(torch.nn.Module):
@@ -328,12 +328,16 @@ def test_hierarchical_model(binary_model, disease_model, dataloader, device, dis
     }
 
 
-def visualize_hierarchical_predictions(binary_model, disease_model, dataloader, device, disease_labels, num_examples=4):
+def visualize_hierarchical_predictions(binary_model, disease_model, dataloader, device, disease_labels, num_examples=4, thresholds=None):
     """
     Visualize predictions from the hierarchical model
     """
     binary_model.eval()
     disease_model.eval()
+    
+    # Default thresholds if none provided
+    if thresholds is None:
+        thresholds = {label: 0.5 for label in disease_labels}
     
     # Get a batch of samples
     images, labels = next(iter(dataloader))
@@ -349,9 +353,13 @@ def visualize_hierarchical_predictions(binary_model, disease_model, dataloader, 
     binary_preds = binary_preds.cpu().numpy()
     disease_preds = disease_preds.cpu().numpy()
     
-    # Convert to binary predictions
+    # Convert to binary predictions using optimal thresholds
     binary_pred_labels = (binary_preds > 0.5).astype(int)
-    disease_pred_labels = (disease_preds > 0.5).astype(int)
+    disease_pred_labels = np.zeros_like(disease_preds, dtype=int)
+    
+    # Apply threshold for each disease separately
+    for j, label in enumerate(disease_labels):
+        disease_pred_labels[:, j] = (disease_preds[:, j] > thresholds[label]).astype(int)
     
     # Plot images with their labels
     fig, axes = plt.subplots(num_examples, 1, figsize=(15, 5*num_examples))
@@ -377,18 +385,27 @@ def visualize_hierarchical_predictions(binary_model, disease_model, dataloader, 
             if idx < labels.size(1) and labels[i][idx] == 1:
                 actual_labels.append(label)
                 
+        # Get predicted disease labels using thresholds
         predicted_labels = [disease_labels[j] for j in range(len(disease_labels)) if disease_pred_labels[i][j] == 1]
         
-        # If no positive labels found, show "No Finding"
+        # If no positive labels found, show "No Finding" or "Uncertain Finding"
         if len(actual_labels) == 0:
             actual_labels = ["No Finding"]
-        if len(predicted_labels) == 0 or binary_pred_labels[i][0] == 0:
-            predicted_labels = ["No Finding"]
+            
+        if len(predicted_labels) == 0:
+            if binary_pred_labels[i][0] == 0:
+                predicted_labels = ["No Finding"]
+            else:
+                # Binary model detected something but no disease passed threshold
+                predicted_labels = ["Uncertain Finding"]
+                # Show highest confidence disease
+                max_idx = np.argmax(disease_preds[i])
+                predicted_labels.append(f"Highest: {disease_labels[max_idx]} ({disease_preds[i][max_idx]:.2f})")
         
         # Display confidence scores
         conf_text = f"Binary confidence: {binary_preds[i][0]:.2f}\n"
         if binary_pred_labels[i][0] == 1:  # Only show disease confidences if binary prediction is positive
-            conf_text += "\n".join([f"{label}: {disease_preds[i][j]:.2f}"
+            conf_text += "\n".join([f"{label}: {disease_preds[i][j]:.2f} (thresh: {thresholds[label]:.2f})"
                                 for j, label in enumerate(disease_labels)
                                 if disease_preds[i][j] > 0.3])
         
@@ -405,4 +422,51 @@ def visualize_hierarchical_predictions(binary_model, disease_model, dataloader, 
         axes[i].set_yticks([])
     
     plt.tight_layout()
-    plt.show() 
+    plt.show()
+
+
+def find_optimal_thresholds(binary_model, disease_model, val_loader, device, disease_labels):
+    """
+    Find the optimal threshold for each disease that maximizes F1 score
+    """
+    # Run predictions on validation data
+    all_disease_labels = []
+    all_disease_preds = []
+    
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images = images.to(device)
+            
+            # Get disease labels (exclude "No Finding" if present)
+            disease_labels_batch = labels[:, 1:] if labels.shape[1] == 15 else labels
+            
+            # Get predictions
+            binary_preds, disease_preds = hierarchical_inference(
+                binary_model, disease_model, images, device, disease_labels
+            )
+            
+            all_disease_labels.append(disease_labels_batch.cpu().numpy())
+            all_disease_preds.append(disease_preds.cpu().numpy())
+    
+    # Concatenate results
+    all_disease_labels = np.vstack(all_disease_labels)
+    all_disease_preds = np.vstack(all_disease_preds)
+    
+    # Find optimal threshold for each disease
+    optimal_thresholds = {}
+    for i, label in enumerate(disease_labels):
+        # Test various thresholds from 0.1 to 0.9
+        best_f1 = 0
+        best_threshold = 0.5
+        
+        for threshold in np.arange(0.1, 0.95, 0.05):
+            preds = (all_disease_preds[:, i] >= threshold).astype(int)
+            f1 = f1_score(all_disease_labels[:, i], preds)
+            
+            if f1 > best_f1:
+                best_f1 = f1
+                best_threshold = threshold
+        
+        optimal_thresholds[label] = best_threshold
+    
+    return optimal_thresholds 
